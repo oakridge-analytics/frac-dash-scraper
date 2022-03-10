@@ -25,9 +25,9 @@ RUN pip install "poetry==$POETRY_VERSION"
 # RUN pip3 --disable-pip-version-check --no-cache-dir install -r /tmp/pip-tmp/requirements.txt \
 #    && rm -rf /tmp/pip-tmp
 
-# Add dependencies for pdftotext
+# Add dependencies for tabula-py (needs Java!)
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
-    && apt-get -y install --no-install-recommends build-essential libpoppler-cpp-dev pkg-config
+    && apt-get -y install --no-install-recommends sudo apt install default-jdk
 
 # [Optional] Uncomment this line to install global node packages.
 # RUN su vscode -c "source /usr/local/share/nvm/nvm.sh && npm install -g <your-package-here>" 2>&1
