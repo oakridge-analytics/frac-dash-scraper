@@ -18,7 +18,7 @@ ENV PYTHONFAULTHANDLER=1 \
   POETRY_VERSION=1.1.13
 
 RUN pip install "poetry==$POETRY_VERSION"
-# RUN poetry install --no-interaction --no-ansi
+RUN poetry install --no-interaction --no-ansi
 
 # [Optional] If your pip requirements rarely change, uncomment this section to add them to the image.
 # COPY requirements.txt /tmp/pip-tmp/

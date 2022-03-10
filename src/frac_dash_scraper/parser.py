@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import tempfile
 import xml.etree.ElementTree as ET
+from io import StringIO
 
 import fire
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib import cm
 from pdfminer.high_level import extract_text_to_fp
 from tabula import read_pdf
 
@@ -154,43 +152,19 @@ def extract_column(
 
 def parse_frac_pdf(filepath: str) -> pd.DataFrame:
 
-    # call(["python.exe", "C:\ProgramData\Anaconda3\Scripts\pdf2txt.py", "-o",
-    # "C:\\Users\\amath\\AnacondaProjects\\output.xml",
-    #  "C:\\Users\\amath\\AnacondaProjects\\TestTestTest.pdf"])
-    # FOR ANDREWS COMPUTER>>>>>>>>
-    # call(["python.exe", "C:\ProgramData\Anaconda3\Scripts\pdf2txt.py",
-    #  "-o", filepath[:-3]+"xml", filepath])
-    # FOR DUSTINS COMPUTER>>>>>>>>>>
-    # call(["python.exe", "C:\\Users\Dustin\\Anaconda3\\Scripts\pdf2txt.py",
-    #  "-o", filepath[:-3]+"xml", filepath])
-    # FOR SUPER COMPUTER>>>>>>>>>>
-    # call(
-    #     [
-    #         "python.exe",
-    #         "C:\\Users\\oakri\\Anaconda3\\Scripts\\pdf2txt.py",
-    #         "-o",
-    #         filepath[:-3] + "xml",
-    #         filepath,
-    #     ],
-    # )
-    filepath_xml = tempfile.TemporaryFile()
-    with open(filepath, "rb") as f:
-        extract_text_to_fp(f, filepath_xml, max_pages=20, output_type="xml")
-
-    # Adjust the default plot size
-    fig_size = plt.rcParams["figure.figsize"]
-    fig_size[0] = 30
-    fig_size[1] = 18
-    plt.rcParams["figure.figsize"] = fig_size
-
-    # In[3]:
-
-    # Read header table
+    xml_out = StringIO()
+    with open(filepath, "rb") as filepath_in:
+        extract_text_to_fp(
+            filepath_in,
+            xml_out,
+            max_pages=20,
+            output_type="xml",
+            codec=None,
+        )
     # Transpose for joining later
     df_header = read_pdf(
         filepath,
-        # area=[70, 50, 280, 430],
-        area=[0, 0, 300, 500],
+        area=[70, 50, 280, 430],
         guess=False,
         pandas_options={"header": None},
     )
@@ -200,23 +174,32 @@ def parse_frac_pdf(filepath: str) -> pd.DataFrame:
     df_header = df_header.reindex(df_header.index.drop(0))
     df_header = df_header.astype("str", copy=True)
 
-    tree = ET.parse(filepath_xml)
-    root = tree.getroot()
+    root = ET.fromstring(xml_out.getvalue())
 
     dfcols = ["attributes", "text_value", "page"]
     df_xml = pd.DataFrame(columns=dfcols)
     page = 1
 
-    while page <= len(tree.findall("page")):
+    xml_detection_list = []
+    while page <= len(root.findall("page")):
         for text in root[page - 1].iter("text"):
             attributes = text.attrib
             text_value = text.text
-            df_xml = df_xml.append(
-                pd.Series([attributes, text_value, page], index=dfcols),
-                ignore_index=True,
+            xml_detection_list.append(
+                {
+                    "attributes": attributes,
+                    "text_value": text_value,
+                    "page": page,
+                },
             )
+            # df_xml = pd.concat([
+            #     df_xml,
+            #     pd.Series([attributes, text_value, page], index=dfcols)],
+            #     ignore_index=True,
+            #     axis=0
+            # )
         page += 1
-
+    df_xml = pd.DataFrame(xml_detection_list)
     df_clean = df_xml.drop(df_xml[df_xml["text_value"] == "\n"].index)
     df_clean["attributes"] = df_clean["attributes"].astype("str")
     df_clean["bbox"] = (
@@ -226,54 +209,61 @@ def parse_frac_pdf(filepath: str) -> pd.DataFrame:
     )
     df_clean["bbox"] = df_clean["bbox"].str[4:]
     df_clean["bbox"] = df_clean["bbox"].str[:-4]
-    df_clean[["x1", "y1", "x2", "y2"]] = df_clean["bbox"].str.split(
-        ",",
-        expand=True,
+    df_clean[["x1", "y1", "x2", "y2"]] = (
+        df_clean["bbox"]
+        .str.split(
+            ",",
+            expand=True,
+        )
+        .iloc[:, 0:4]
     )
-    df_clean[["x1", "y1", "x2", "y2"]] = df_clean[
-        ["x1", "y1", "x2", "y2"]
-    ].astype(
-        "float",
+    # Clean up and cast to float
+    df_clean[["x1", "y1", "x2", "y2"]] = (
+        df_clean[["x1", "y1", "x2", "y2"]]
+        .apply(lambda x: x.str.replace(r"[^0-9.]", "", regex=True))
+        .astype("float")
     )
     df_clean = df_clean.dropna()
 
-    def pdf_to_plot(df):
-        """pdf_to_plot requires a dataframe with columns:
-        page, x1, y1, and text_value"""
-        fig, ax = plt.subplots()
-        df_plot = df.copy()
-        df_plot["y1"] = df_plot["y1"].values - (df_plot["page"] - 1) * 565.506
-        df_plot["y2"] = df_plot["y2"].values - (df_plot["page"] - 1) * 565.506
-        df_plot["y1"] = (df_plot["y1"] + df_plot["y2"]) / 2
-        df_plot["x1"] = (df_plot["x1"] + df_plot["x2"]) / 2
-        ax.scatter(
-            df_plot["x1"].values,
-            df_plot["y1"].values,
-            s=0.01,
-            c=df_plot["x1"].values,
-            cmap=cm.plasma,
-        )
-        for i, txt in enumerate(df_plot["text_value"].values):
-            ax.annotate(
-                txt,
-                (df_plot["x1"].iloc[i], df_plot["y1"].iloc[i]),
-                fontsize=5,
-            )
+    # def pdf_to_plot(df):
+    #     """pdf_to_plot requires a dataframe with columns:
+    #     page, x1, y1, and text_value"""
+    #     fig, ax = plt.subplots()
+    #     df_plot = df.copy()
+    #     df_plot["y1"] = df_plot["y1"].values - \
+    #       (df_plot["page"] - 1) * 565.506
+    #     df_plot["y2"] = df_plot["y2"].values - \
+    #       (df_plot["page"] - 1) * 565.506
+    #     df_plot["y1"] = (df_plot["y1"] + df_plot["y2"]) / 2
+    #     df_plot["x1"] = (df_plot["x1"] + df_plot["x2"]) / 2
+    #     ax.scatter(
+    #         df_plot["x1"].values,
+    #         df_plot["y1"].values,
+    #         s=0.01,
+    #         c=df_plot["x1"].values,
+    #         cmap=cm.plasma,
+    #     )
+    #     for i, txt in enumerate(df_plot["text_value"].values):
+    #         ax.annotate(
+    #             txt,
+    #             (df_plot["x1"].iloc[i], df_plot["y1"].iloc[i]),
+    #             fontsize=5,
+    #         )
 
-    df_clean["text_value"][df_clean["text_value"].str.startswith("(cid")] = " "
+    df_clean.loc[
+        df_clean["text_value"].str.startswith("(cid"),
+        "text_value",
+    ] = " "
     df_clean = drop_footer(df_clean, "Page: ")
 
     combined_string = "".join(df_clean["text_value"].values.tolist())
-    print(df_clean["text_value"].size)
     combined_string_encoded = combined_string.encode(
         encoding="UTF-8",
         errors="ignore",
     )  # String together characters, verify encoding
     combined_string = combined_string_encoded.decode()
     comment_index = str.find(combined_string, "Comments")
-    print(comment_index)
     comment_y1 = df_clean["y1"].iloc[comment_index]
-    print(comment_y1)
     comment_page = df_clean["page"].iloc[comment_index]
     df_trim = df_clean[
         (df_clean["page"] != comment_page) | (df_clean["y1"] > comment_y1)

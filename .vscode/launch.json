@@ -10,7 +10,7 @@
             "request": "launch",
             "module": "frac_dash_scraper.parser",
             "args": [
-                "--filepath='data/75852230.pdf'"
+                "--filepath='data/sample_report.pdf'"
             ]
         },
     ]
