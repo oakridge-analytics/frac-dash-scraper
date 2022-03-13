@@ -10,148 +10,24 @@ from pdfminer.high_level import extract_text_to_fp
 from tabula import read_pdf
 
 
-def drop_footer(df: pd.DataFrame, footer_text: str) -> pd.DataFrame:
-    """Strip the footer in the PDF from the Dataframe.
-    Checks for matching footer text,
-    strips based on any text with a y1 value greater than the footer text.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Dataframe of text from PDF, columns "text_value","page" and "y1"
-    footer_text : str
-        Text to look for in column "text_value"
-
-    Returns
-    -------
-    pd.DataFrame
-        Dataframe with anything removed that appears
-        lower than footer text in PDF.
-    """
-    df_temp = df.copy()
-    combined_string = "".join(df_temp["text_value"].values.tolist())
-    footer_index = str.find(combined_string, footer_text)
-    footer_y1 = df_temp["y1"].iloc[footer_index]
-    df_temp = df_temp[df_temp["y1"] > footer_y1]
-    return df_temp
-
-
-def drop_header(df: pd.DataFrame, header_text: str) -> pd.DataFrame:
-    """Remove all characters that appear above the header text in the PDF.
-    Uses the y1 value of the header text to determine the top of the header.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Dataframe of text from PDF, columns "text_value","page" and "y1"
-    header_text : str
-        _description_
-
-    Returns
-    -------
-    pd.DataFrame
-        _description_
-    """
-    page = 1
-    search_index = 0
-    df_temp = df.copy()
-    combined_string = "".join(df_temp["text_value"].values.tolist())
-    while page > 0:
-        if df_temp[df_temp["page"] == page].shape[0] > 0:
-            header_index = combined_string.find(header_text, search_index) + 4
-            search_index = header_index + 1
-            header_y1 = df["y1"].iloc[header_index]
-            df_temp = df_temp[
-                (df_temp["y1"] < header_y1) | (df_temp["page"] != page)
-            ]
-            page += 1
-        else:
-            page = 0
-    return df_temp
-
-
-def left_bound(df: pd.DataFrame, search_text: str) -> float:
-    """Find the left bound of the search text in the PDF.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Dataframe with columns "text_value",and "x1"
-    search_text : str
-        Text to find to mark left edge of column
-
-    Returns
-    -------
-    float
-        Position in string of left bound of search text
-    """
-    df_temp = df.copy()
-    combined_string = "".join(df_temp["text_value"].values.tolist())
-    search_index = combined_string.find(search_text)
-    search_x1 = []
-    if search_index == -1:
-        search_x1.append(0)
-    else:
-        search_x1.append(df["x1"].iloc[search_index])
-    return search_x1
-
-
-def top_bounds(df: pd.DataFrame, search_text: str) -> list:
-    """Find the top bound of the search text in the PDF.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Dataframe with columns "text_value",and "y1"
-    search_text : str
-        Text to find the top bound of, in the column
-
-    Returns
-    -------
-    list
-        List of top bounds of search text in the column
-    """
-    df_temp = df.copy()
-    combined_string = "".join(df_temp["text_value"].values.tolist())
-    search_index = -1
-    counter = 0
-    bounds = []
-    while combined_string.find(search_text, search_index + 1) >= 0:
-        search_index = combined_string.find(search_text, search_index + 1)
-        bounds.append(df["y1"].iloc[search_index])
-        counter += 1
-    return bounds
-
-
-def extract_column(
-    df: pd.DataFrame,
-    left: float,
-    right: float,
-) -> pd.DataFrame:
-    """Return a dataframe of the column of text between the left and right bounds.
-    Using the x1 values of the text, the column is extracted.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Dataframe with columns "x1"
-    left : float
-        Left side of column
-    right : float
-        Right side of column
-
-    Returns
-    -------
-    pd.DataFrame
-        Column of text between left and right bounds by x1 value
-    """
-    df_temp = df.copy()
-    df_temp = df_temp[(df_temp["x1"] >= left) & (df_temp["x1"] < right)]
-    return df_temp
-
-
 def parse_frac_pdf(filepath: str) -> pd.DataFrame:
+    """Parse an Alberta FracFocus.ca PDF into a Pandas Dataframe.
+    Extracts the top table first for metadata about well, then joins on all
+    components of the frac job listed in lower tables - stitches
+    tables together over multiple pages.
 
+    Parameters
+    ----------
+    filepath : str
+        Path to PDF file
+
+    Returns
+    -------
+    pd.DataFrame
+        Parsed data from FracFocus.ca PDF.
+    """
+
+    # Extract full PDF into XML by character.
     xml_out = StringIO()
     with open(filepath, "rb") as filepath_in:
         extract_text_to_fp(
@@ -161,12 +37,15 @@ def parse_frac_pdf(filepath: str) -> pd.DataFrame:
             output_type="xml",
             codec=None,
         )
-    # Transpose for joining later
+
+    # Extract header table with metadata first.
     df_header = read_pdf(
         filepath,
         area=[70, 50, 280, 430],
         guess=False,
         pandas_options={"header": None},
+        silent=True,
+        pages=1,
     )
     df_header = df_header[0]
     df_header = df_header.transpose()
@@ -174,8 +53,8 @@ def parse_frac_pdf(filepath: str) -> pd.DataFrame:
     df_header = df_header.reindex(df_header.index.drop(0))
     df_header = df_header.astype("str", copy=True)
 
+    # Start parsing XML of the entire report.
     root = ET.fromstring(xml_out.getvalue())
-
     dfcols = ["attributes", "text_value", "page"]
     df_xml = pd.DataFrame(columns=dfcols)
     page = 1
@@ -192,12 +71,7 @@ def parse_frac_pdf(filepath: str) -> pd.DataFrame:
                     "page": page,
                 },
             )
-            # df_xml = pd.concat([
-            #     df_xml,
-            #     pd.Series([attributes, text_value, page], index=dfcols)],
-            #     ignore_index=True,
-            #     axis=0
-            # )
+
         page += 1
     df_xml = pd.DataFrame(xml_detection_list)
     df_clean = df_xml.drop(df_xml[df_xml["text_value"] == "\n"].index)
@@ -224,32 +98,6 @@ def parse_frac_pdf(filepath: str) -> pd.DataFrame:
         .astype("float")
     )
     df_clean = df_clean.dropna()
-
-    # def pdf_to_plot(df):
-    #     """pdf_to_plot requires a dataframe with columns:
-    #     page, x1, y1, and text_value"""
-    #     fig, ax = plt.subplots()
-    #     df_plot = df.copy()
-    #     df_plot["y1"] = df_plot["y1"].values - \
-    #       (df_plot["page"] - 1) * 565.506
-    #     df_plot["y2"] = df_plot["y2"].values - \
-    #       (df_plot["page"] - 1) * 565.506
-    #     df_plot["y1"] = (df_plot["y1"] + df_plot["y2"]) / 2
-    #     df_plot["x1"] = (df_plot["x1"] + df_plot["x2"]) / 2
-    #     ax.scatter(
-    #         df_plot["x1"].values,
-    #         df_plot["y1"].values,
-    #         s=0.01,
-    #         c=df_plot["x1"].values,
-    #         cmap=cm.plasma,
-    #     )
-    #     for i, txt in enumerate(df_plot["text_value"].values):
-    #         ax.annotate(
-    #             txt,
-    #             (df_plot["x1"].iloc[i], df_plot["y1"].iloc[i]),
-    #             fontsize=5,
-    #         )
-
     df_clean.loc[
         df_clean["text_value"].str.startswith("(cid"),
         "text_value",
@@ -312,7 +160,7 @@ def parse_frac_pdf(filepath: str) -> pd.DataFrame:
     cell_y1s.extend(top_bounds(df_body, "PROPPANT"))
     cell_y1s.extend(top_bounds(df_body, "ADDITIVE"))
     cell_y1s.extend([0])
-    # THIS WILL NOT WORK ONCE PAGE NUMBERS ARE FACTORED IN
+
     cell_y1s.extend([612 * np.max(df_body["page"])])
     cell_y1s = sorted(cell_y1s)
     df_body["Row"] = pd.cut(df_body["y1"], cell_y1s, labels=False)
@@ -366,6 +214,146 @@ def parse_frac_pdf(filepath: str) -> pd.DataFrame:
     )
 
     return useful
+
+
+def drop_footer(df: pd.DataFrame, footer_text: str) -> pd.DataFrame:
+    """Strip the footer in the PDF from the Dataframe.
+    Checks for matching footer text,
+    strips based on any text with a y1 value greater than the footer text.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Dataframe of text from PDF, columns "text_value","page" and "y1"
+    footer_text : str
+        Text to look for in column "text_value"
+
+    Returns
+    -------
+    pd.DataFrame
+        Dataframe with anything removed that appears
+        lower than footer text in PDF.
+    """
+    df_temp = df.copy()
+    combined_string = "".join(df_temp["text_value"].values.tolist())
+    footer_index = str.find(combined_string, footer_text)
+    footer_y1 = df_temp["y1"].iloc[footer_index]
+    df_temp = df_temp[df_temp["y1"] > footer_y1]
+    return df_temp
+
+
+def drop_header(df: pd.DataFrame, header_text: str) -> pd.DataFrame:
+    """Remove all characters that appear above the header text in the PDF.
+    Uses the y1 value of the header text to determine the top of the header.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Dataframe of text from PDF, columns "text_value","page" and "y1"
+    header_text : str
+        _description_
+
+    Returns
+    -------
+    pd.DataFrame
+        _description_
+    """
+    page = 1
+    search_index = 0
+    df_temp = df.copy()
+    combined_string = "".join(df_temp["text_value"].values.tolist())
+    while page > 0:
+        if df_temp[df_temp["page"] == page].shape[0] > 0:
+            header_index = combined_string.find(header_text, search_index) + 4
+            search_index = header_index + 1
+            header_y1 = df["y1"].iloc[header_index]
+            df_temp = df_temp[
+                (df_temp["y1"] < header_y1) | (df_temp["page"] != page)
+            ]
+            page += 1
+        else:
+            page = 0
+    return df_temp
+
+
+def left_bound(df: pd.DataFrame, search_text: str) -> list[float]:
+    """Find the left bound of the search text in the PDF.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Dataframe with columns "text_value",and "x1"
+    search_text : str
+        Text to find to mark left edge of column
+
+    Returns
+    -------
+    List[float]
+        Position in string of left bound of search text
+    """
+    df_temp = df.copy()
+    combined_string = "".join(df_temp["text_value"].values.tolist())
+    search_index = combined_string.find(search_text)
+    search_x1 = []
+    if search_index == -1:
+        search_x1.append(0)
+    else:
+        search_x1.append(df["x1"].iloc[search_index])
+    return search_x1
+
+
+def top_bounds(df: pd.DataFrame, search_text: str) -> list[float]:
+    """Find the top bound of the search text in the PDF.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Dataframe with columns "text_value",and "y1"
+    search_text : str
+        Text to find the top bound of, in the column
+
+    Returns
+    -------
+    List[float]
+        List of top bounds of search text in the column
+    """
+    df_temp = df.copy()
+    combined_string = "".join(df_temp["text_value"].values.tolist())
+    search_index = -1
+    counter = 0
+    bounds = []
+    while combined_string.find(search_text, search_index + 1) >= 0:
+        search_index = combined_string.find(search_text, search_index + 1)
+        bounds.append(df["y1"].iloc[search_index])
+        counter += 1
+    return bounds
+
+
+def extract_column(
+    df: pd.DataFrame,
+    left: float,
+    right: float,
+) -> pd.DataFrame:
+    """Return a dataframe of the column of text between the left and right bounds.
+    Using the x1 values of the text, the column is extracted.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Dataframe with columns "x1"
+    left : float
+        Left side of column
+    right : float
+        Right side of column
+
+    Returns
+    -------
+    pd.DataFrame
+        Column of text between left and right bounds by x1 value
+    """
+    df_temp = df.copy()
+    df_temp = df_temp[(df_temp["x1"] >= left) & (df_temp["x1"] < right)]
+    return df_temp
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ Within the container for the project (see [Development Setup](#development-setup
 
 ```bash
 poetry shell
+poetry install
 python -c "from frac_dash_scraper.parser import parse_frac_pdf; print(parse_frac_pdf('data/sample_report.pdf'))"
 ```
 ## Development Setup
